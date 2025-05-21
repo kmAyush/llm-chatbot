@@ -1,108 +1,73 @@
 import { Message } from "@/lib/types";
 import { generateUUID } from "@/lib/utils";
-import { fetchEventSource } from "@microsoft/fetch-event-source";
 
-const ollamaUrl = "http://localhost:11434/api/chat"; 
-const apiUrl =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/chat/stream";
+const ollamaUrl = "http://localhost:11434/api/chat";
 
-export const streamChat = async ({
-  inputContent,
-  setIsLoading,
-  append,
-}) => {
+export const streamChat = async ({ inputContent, setIsLoading, append }) => {
   try {
     setIsLoading(true);
-    await fetchEventSource(ollamaUrl, {
+
+    const response = await fetch(ollamaUrl, {
       method: "POST",
       headers: {
-        Accept: "text/event-stream",
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "gemma", // Replace with your model
+        model: "gemma:2b",  // For Gemma 2b model ollama setup
         messages: [{ role: "user", content: inputContent }],
         stream: true,
       }),
-      onmessage(event) {
-        const data = JSON.parse(event.data);
-        const content = data.message.content;
-        if (content) {
-          const message: Message = {
-            id: generateUUID(),
-            content,
-            role: "assistant",
-            parts: [{ type: "text", text: content }],
-          };
-          append(message);
-        }
-      },
-      onclose() {
-        console.log("Connection closed");
-      },
-      onerror(err) {
-        console.error("Error:", err);
-      },
     });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! Status: ${response.status}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error("Response body is not readable");
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        console.log("Stream completed");
+        break;
+      }
+
+      // Append chunk to buffer and decode
+      buffer += decoder.decode(value, { stream: true });
+
+      // Split buffer by newlines to process complete JSON objects
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || ""; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.trim()) {
+          try {
+            const data = JSON.parse(line);
+            const content = data.message?.content;
+            if (content) {
+              const message: Message = {
+                id: generateUUID(),
+                content,
+                role: "assistant",
+                parts: [{ type: "text", text: content }],
+              };
+              append(message);
+            }
+          } catch (err) {
+            console.error("Error parsing JSON line:", err, line);
+          }
+        }
+      }
+    }
   } catch (err) {
     console.error("Error:", err);
   } finally {
     setIsLoading(false);
   }
 };
-
-// export const streamChat = async ({
-//   inputContent,
-//   setIsLoading,
-//   append,
-// }: {
-//   inputContent: string;
-//   setIsLoading: (isLoading: boolean) => void; // Add setIsLoading as a parameter
-//   append: (message: Message) => void;
-// }) => {
-//   try {
-//     setIsLoading(true);
-//     // handle streaming response
-//     await fetchEventSource(`${apiUrl}`, {
-//       method: "POST",
-//       headers: {
-//         Accept: "text/event-stream",
-//         "Content-Type": "application/json", // ✅ Add this line
-//       },
-//       body: JSON.stringify({ query: inputContent }),
-//       onopen(res) {
-//         if (res.ok && res.status === 200) {
-//           console.log("Connection made ", res);
-//         } else if (
-//           res.status >= 400 &&
-//           res.status < 500 &&
-//           res.status !== 429
-//         ) {
-//           console.log("Client side error ", res);
-//         }
-//       },
-//       onmessage(event) {
-//         console.log(`${event.data}`);
-//         const text = JSON.parse(event.data);
-//         const content: Message = {
-//           id: generateUUID(),
-//           content: text["content"],
-//           role: "assistant",
-//           parts: [{ type: "text", text: text["content"] }],
-//         };
-
-//         append(content);
-//       },
-//       onclose() {
-//         console.log("Connection closed by the server");
-//       },
-//       onerror(err) {
-//         console.log("There was an error from server", err);
-//       },
-//     });
-//   } catch (err) {
-//     console.log(`Error when streaming services. Details: ${err}`);
-//   } finally {
-//     setIsLoading(false);
-//   }
-// };
